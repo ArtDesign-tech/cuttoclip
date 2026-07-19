@@ -1,0 +1,26 @@
+{
+  "name": "cuttoclip",
+  "private": true,
+  "version": "0.2.0-beta.1",
+  "description": "Local-first AI clip automation workspace",
+  "engines": {
+    "node": "24.x"
+  },
+  "workspaces": ["apps/web", "gateway", "apps/desktop"],
+  "scripts": {
+    "dev": "npm run dev --workspace @cuttoclip/web",
+    "build": "npm run build --workspace @cuttoclip/web",
+    "build:demo:web": "npm run build:demo --workspace @cuttoclip/web",
+    "build:demo:desktop": "npm run build:demo --workspace @cuttoclip/desktop",
+    "typecheck": "npm run typecheck --workspace @cuttoclip/web",
+    "test:web": "npm run test --workspace @cuttoclip/web",
+    "test:e2e": "npm run test:e2e --workspace @cuttoclip/web",
+    "dev:gateway": "npm run dev --workspace @cuttoclip/gateway",
+    "dev:worker": "python -m uvicorn apps.worker.app.main:app --reload --port 4317",
+    "build:gateway": "npm run build --workspace @cuttoclip/gateway",
+    "test:gateway": "npm run test --workspace @cuttoclip/gateway",
+    "admin:gateway": "npm run admin --workspace @cuttoclip/gateway --",
+    "test:worker": "python -m pytest apps/worker/tests",
+    "check": "npm run typecheck && npm run test:web && npm run build:gateway && npm run test:gateway && npm run test:worker"
+  }
+}

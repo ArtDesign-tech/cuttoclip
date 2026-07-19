@@ -1,0 +1,36 @@
+[package]
+name = "cuttoclip"
+version = "0.2.0-beta.1"
+description = "Local-first AI clipping studio"
+authors = ["CutToClip"]
+edition = "2021"
+
+[lib]
+name = "cuttoclip_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-stronghold = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes-gcm = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
+zeroize = "1"
+sha2 = "0.10"
+hex = "0.4"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_IO",
+] }

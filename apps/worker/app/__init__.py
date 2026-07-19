@@ -1,0 +1,1 @@
+"""CutToClip local worker package."""
