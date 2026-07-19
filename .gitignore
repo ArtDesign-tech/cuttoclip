@@ -25,3 +25,5 @@ scripts/build-beta.local.ps1
 tools/
 apps/worker/dist/
 apps/worker/build/
+apps/web/test-results/
+apps/web/playwright-report/
