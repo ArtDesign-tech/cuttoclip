@@ -1,0 +1,14 @@
+{
+  "name": "@cuttoclip/desktop",
+  "private": true,
+  "version": "0.2.0-beta.1",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:beta": "tauri build --config src-tauri/tauri.beta.conf.json --target x86_64-pc-windows-msvc",
+    "build:demo": "tauri build --config src-tauri/tauri.demo.conf.json --target x86_64-pc-windows-msvc"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "latest"
+  }
+}
