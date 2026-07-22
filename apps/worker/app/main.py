@@ -932,7 +932,11 @@ def _bundled_ffmpeg_location() -> str | None:
 def _youtube_info(url: str, options: dict[str, object]) -> dict[str, object]:
     if yt_dlp is None:
         raise RuntimeError("yt-dlp is not installed")
-    with yt_dlp.YoutubeDL(options) as downloader:
+    merged = dict(options)
+    cookies = os.getenv("YTDLP_COOKIES", "")
+    if cookies and os.path.isfile(cookies):
+        merged["cookiefile"] = cookies
+    with yt_dlp.YoutubeDL(merged) as downloader:
         return downloader.extract_info(url, download=not bool(options.get("skip_download"))) or {}
 
 
