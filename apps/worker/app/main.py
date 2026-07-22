@@ -187,9 +187,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="CutToClip Local Worker", version="0.2.0-beta.1", lifespan=lifespan)
+_default_cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+]
+_extra_cors = [o.strip() for o in os.getenv("CUTTOCLIP_CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "tauri://localhost"],
+    allow_origins=[*_default_cors_origins, *_extra_cors],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -197,6 +205,7 @@ app.add_middleware(
 TRANSCRIPTION_MAX_ATTEMPTS = 3
 TRANSCRIPTION_RETRY_BASE_SECONDS = 1.0
 TRANSCRIPTION_RETRY_MAX_SECONDS = 30.0
+HIGHLIGHTS_MAX_ATTEMPTS = 3
 
 
 @app.exception_handler(WorkerError)
@@ -332,6 +341,26 @@ def _provider_capability_report(mode: providers.ProviderMode) -> dict[str, objec
                 "keyCount": gemini_count,
             },
         }
+    if mode == "openai":
+        groq = providers.groq_config()
+        _openai = providers.openrouter_config()
+        groq_count = len(providers.groq_api_keys())
+        openai_count = len(providers.openrouter_api_keys())
+        return {
+            "mode": "openai",
+            "transcription": {
+                "provider": "groq",
+                "model": groq.model,
+                "keyPresent": groq_count > 0,
+                "keyCount": groq_count,
+            },
+            "highlights": {
+                "provider": "9router",
+                "model": _openai.model,
+                "keyPresent": openai_count > 0,
+                "keyCount": openai_count,
+            },
+        }
     return {
         "mode": "managed",
         "transcription": {"provider": "gateway"},
@@ -342,15 +371,12 @@ def _provider_capability_report(mode: providers.ProviderMode) -> dict[str, objec
 
 @app.get("/api/system/capabilities")
 async def capabilities() -> dict[str, object]:
-    encoders: list[str] = []
     executable = ffmpeg_path()
     if executable:
-        code, stdout, stderr = await run_command(executable, "-hide_banner", "-encoders")
-        encoder_output = stdout + stderr
-        if code == 0:
-            for name in ("h264_nvenc", "h264_qsv", "h264_amf", "libx264"):
-                if name in encoder_output:
-                    encoders.append(name)
+        encoders = await detect_encoders(executable)
+    else:
+        encoders = []
+    default_encoder = resolve_encoder(encoders, "auto")
     mode = providers.provider_mode()
     provider_report = _provider_capability_report(mode)
     return {
@@ -360,6 +386,7 @@ async def capabilities() -> dict[str, object]:
         "ytDlp": yt_dlp is not None,
         "deno": deno_installed(),
         "encoders": encoders,
+        "defaultEncoder": default_encoder,
         "vision": vision_status(),
         "providerMode": mode,
         "providerConfigured": provider_configuration_error() is None,
@@ -890,6 +917,18 @@ async def execute_job(job_id: str) -> None:
             store.save_project(project)
 
 
+def _bundled_ffmpeg_location() -> str | None:
+    """Directory holding the bundled ffmpeg/ffprobe, for yt-dlp's muxing step.
+
+    yt-dlp searches PATH for ffmpeg on its own; on a clean tester PC (no global
+    ffmpeg) the bv*+ba merge would fail, so we point it at the bundled binary.
+    """
+    executable = ffmpeg_path()
+    if executable:
+        return str(Path(executable).parent)
+    return None
+
+
 def _youtube_info(url: str, options: dict[str, object]) -> dict[str, object]:
     if yt_dlp is None:
         raise RuntimeError("yt-dlp is not installed")
@@ -995,6 +1034,9 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
             "no_warnings": True,
             "progress_hooks": [stop_cancelled_download],
         }
+        ffmpeg_location = _bundled_ffmpeg_location()
+        if ffmpeg_location:
+            options["ffmpeg_location"] = ffmpeg_location
         if deno:
             options["js_runtimes"] = {"deno": {"path": deno}}
         # Clear stale fragments from a previous interrupted download before yt-dlp
@@ -1114,15 +1156,27 @@ async def process_prepare(job: Job, project: Project) -> tuple[Literal["succeede
 
 
 def provider_configuration_error() -> WorkerError | None:
-    if providers.provider_mode() == "byok":
+    mode = providers.provider_mode()
+    if mode == "byok":
         return providers.byok_configuration_error()
+    if mode == "openai":
+        # Transcription always goes through Groq; highlights through 9router.
+        if not providers.groq_api_keys():
+            return WorkerError(
+                "BYOK_GROQ_KEY_MISSING",
+                "A Groq API key is required for transcription in any non-managed mode.",
+                status_code=503,
+                retryable=False,
+            )
+        return providers.openai_highlights_configuration_error()
     return gateway_configuration_error()
 
 
 async def transcribe_audio(chunk: AudioChunk, language: str) -> Transcript:
     if httpx is None:
         raise WorkerError("HTTP_CLIENT_UNAVAILABLE", "httpx is not installed in the worker.", status_code=503, retryable=True)
-    if providers.provider_mode() == "byok":
+    mode = providers.provider_mode()
+    if mode in ("byok", "openai"):
         return await transcribe_audio_byok(chunk, language)
     return await transcribe_audio_managed(chunk, language)
 
@@ -1231,14 +1285,26 @@ async def transcribe_audio_byok(chunk: AudioChunk, language: str) -> Transcript:
                     await asyncio.sleep(_transcription_retry_delay(None, attempt))
                     continue
 
-                if providers.is_key_rotate_status(response.status_code):
-                    # This key is rate-limited/quota-exhausted/rejected. Stop
-                    # retrying it and fall through to the next key.
+                if providers.is_key_permanent_reject(response.status_code):
+                    # 401/402: the key is invalid or out of quota. Retrying it is
+                    # futile — fall through to the next key immediately.
                     last_rotate_error = gateway_response_error(
                         response, "TRANSCRIPTION_FAILED", "Groq rejected the API key."
                     )
                     rotate = True
                     break
+
+                if providers.is_key_transient_status(response.status_code):
+                    # 403/429: a valid key momentarily failing. Retry on the same
+                    # key with backoff; only rotate once its retries are spent.
+                    last_rotate_error = gateway_response_error(
+                        response, "TRANSCRIPTION_FAILED", "Groq temporarily rejected the API key."
+                    )
+                    if attempt + 1 >= TRANSCRIPTION_MAX_ATTEMPTS:
+                        rotate = True
+                        break
+                    await asyncio.sleep(_transcription_retry_delay(response, attempt))
+                    continue
 
                 if response.status_code >= 400:
                     groq_error = gateway_response_error(
@@ -1319,8 +1385,11 @@ def gateway_response_error(response: Any, fallback_code: str, fallback_message: 
 async def request_highlights(project: Project, settings: ProjectSettings) -> list[Candidate]:
     if httpx is None:
         raise WorkerError("HTTP_CLIENT_UNAVAILABLE", "httpx is not installed in the worker.", status_code=503, retryable=True)
-    if providers.provider_mode() == "byok":
+    mode = providers.provider_mode()
+    if mode == "byok":
         return await request_highlights_byok(project, settings)
+    if mode == "openai":
+        return await request_highlights_openai(project, settings)
     return await request_highlights_managed(project, settings)
 
 
@@ -1333,10 +1402,6 @@ async def request_highlights_managed(project: Project, settings: ProjectSettings
         raise WorkerError("TRANSCRIPT_REQUIRED", "Prepare the project before analyzing highlights.", status_code=409)
     request_payload = {
         "transcript": transcript.text,
-        # Word timestamps are retained locally for captions, but highlight selection
-        # only needs segment timing. Some providers return words a few milliseconds
-        # outside their parent segment, so forwarding words would reject an otherwise
-        # valid transcript at the gateway boundary.
         "segments": [highlight_segment_payload(segment) for segment in transcript.segments],
         "sourceDurationSeconds": project.durationSeconds,
         "settings": {
@@ -1346,60 +1411,82 @@ async def request_highlights_managed(project: Project, settings: ProjectSettings
             "language": settings.language,
         },
     }
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(240.0)) as client:
-            response = await client.post(
-                f"{gateway_url()}/v1/highlights",
-                headers=gateway_headers(),
-                json=request_payload,
-            )
-    except httpx.HTTPError as error:
-        raise WorkerError(
-            "HIGHLIGHTS_UNREACHABLE",
-            "The highlight gateway could not be reached.",
-            status_code=502,
-            retryable=True,
-            details=str(error),
-        ) from error
-    if response.status_code >= 400:
-        raise gateway_response_error(response, "HIGHLIGHTS_FAILED", "Highlight analysis failed.")
-    try:
-        payload = response.json()
-        clips = payload.get("clips") if isinstance(payload, dict) else None
-        if not isinstance(clips, list) or not clips:
-            raise ValueError("clips must be a non-empty array")
-        candidates: list[Candidate] = []
-        for index, raw in enumerate(clips):
-            if not isinstance(raw, dict):
-                raise ValueError(f"clip {index + 1} is not an object")
-            candidate = Candidate.model_validate(
-                {**raw, "id": raw.get("id") or f"clip-{index + 1:02d}", "source": "ai"}
-            )
-            duration = candidate.endSeconds - candidate.startSeconds
-            if candidate.endSeconds > project.durationSeconds + 0.05:
-                raise ValueError(f"clip {candidate.id} exceeds source duration")
-            if duration < settings.duration.minSeconds or duration > settings.duration.maxSeconds:
-                raise ValueError(f"clip {candidate.id} is outside the requested duration range")
-            candidates.append(candidate)
-    except (ValueError, TypeError, ValidationError) as error:
-        raise WorkerError(
-            "HIGHLIGHTS_RESPONSE_INVALID",
-            "The highlight gateway returned invalid clip candidates.",
-            status_code=502,
-            retryable=True,
-            details=str(error),
-        ) from error
+    async with httpx.AsyncClient(timeout=httpx.Timeout(240.0)) as client:
+        for attempt in range(HIGHLIGHTS_MAX_ATTEMPTS):
+            response = None
+            try:
+                response = await client.post(
+                    f"{gateway_url()}/v1/highlights",
+                    headers=gateway_headers(),
+                    json=request_payload,
+                )
+            except httpx.HTTPError as error:
+                gateway_error = WorkerError(
+                    "HIGHLIGHTS_UNREACHABLE",
+                    "The highlight gateway could not be reached.",
+                    status_code=502,
+                    retryable=True,
+                    details=str(error),
+                )
+                if attempt + 1 >= HIGHLIGHTS_MAX_ATTEMPTS:
+                    raise gateway_error from error
+                await asyncio.sleep(_transcription_retry_delay(None, attempt))
+                continue
 
-    kept: list[Candidate] = []
-    for candidate in sorted(candidates, key=lambda item: item.score, reverse=True):
-        duplicate = any(overlap_ratio(candidate, existing) > 0.5 for existing in kept)
-        if not duplicate:
-            kept.append(candidate)
-        if len(kept) >= settings.clipCount:
-            break
-    if not kept:
-        raise WorkerError("NO_VALID_HIGHLIGHTS", "No valid highlight candidates were found.", retryable=True)
-    return kept
+            if response.status_code >= 400:
+                gateway_error = gateway_response_error(response, "HIGHLIGHTS_FAILED", "Highlight analysis failed.")
+                if not gateway_error.retryable or attempt + 1 >= HIGHLIGHTS_MAX_ATTEMPTS:
+                    raise gateway_error
+                await asyncio.sleep(_transcription_retry_delay(response, attempt))
+                continue
+
+            try:
+                payload = response.json()
+                clips = payload.get("clips") if isinstance(payload, dict) else None
+                if not isinstance(clips, list) or not clips:
+                    raise ValueError("clips must be a non-empty array")
+                candidates: list[Candidate] = []
+                for index, raw in enumerate(clips):
+                    if not isinstance(raw, dict):
+                        raise ValueError(f"clip {index + 1} is not an object")
+                    candidate = Candidate.model_validate(
+                        {**raw, "id": raw.get("id") or f"clip-{index + 1:02d}", "source": "ai"}
+                    )
+                    duration = candidate.endSeconds - candidate.startSeconds
+                    if candidate.endSeconds > project.durationSeconds + 0.05:
+                        raise ValueError(f"clip {candidate.id} exceeds source duration")
+                    if duration < settings.duration.minSeconds or duration > settings.duration.maxSeconds:
+                        raise ValueError(f"clip {candidate.id} is outside the requested duration range")
+                    candidates.append(candidate)
+                kept: list[Candidate] = []
+                for candidate in sorted(candidates, key=lambda item: item.score, reverse=True):
+                    duplicate = any(overlap_ratio(candidate, existing) > 0.5 for existing in kept)
+                    if not duplicate:
+                        kept.append(candidate)
+                    if len(kept) >= settings.clipCount:
+                        break
+                if not kept:
+                    raise WorkerError("NO_VALID_HIGHLIGHTS", "No valid highlight candidates were found.", retryable=True)
+                return kept
+            except (ValueError, TypeError, ValidationError) as error:
+                gateway_error = WorkerError(
+                    "HIGHLIGHTS_RESPONSE_INVALID",
+                    "The highlight gateway returned invalid clip candidates.",
+                    status_code=502,
+                    retryable=True,
+                    details=str(error),
+                )
+                if attempt + 1 >= HIGHLIGHTS_MAX_ATTEMPTS:
+                    raise gateway_error from error
+                await asyncio.sleep(_transcription_retry_delay(response if isinstance(response, object) else None, attempt))
+                continue
+
+    raise WorkerError(
+        "HIGHLIGHTS_FAILED",
+        "Highlight analysis exhausted all retry attempts.",
+        status_code=502,
+        retryable=True,
+    )
 
 
 async def request_highlights_byok(project: Project, settings: ProjectSettings) -> list[Candidate]:
@@ -1436,27 +1523,48 @@ async def request_highlights_byok(project: Project, settings: ProjectSettings) -
             response = None
             while key_index < len(keys):
                 config = providers.gemini_config(keys[key_index])
-                try:
-                    response = await client.post(
-                        config.generate_content_url,
-                        headers={
-                            "content-type": "application/json",
-                            "x-goog-api-key": keys[key_index],
-                        },
-                        json=request_body,
-                    )
-                except httpx.HTTPError as error:
-                    raise WorkerError(
-                        "HIGHLIGHTS_UNREACHABLE",
-                        "Gemini could not be reached for AI Moments.",
-                        status_code=502,
-                        retryable=True,
-                        details=str(error),
-                    ) from error
-                if providers.is_key_rotate_status(response.status_code):
-                    last_rotate_error = gateway_response_error(
-                        response, "HIGHLIGHTS_FAILED", "Gemini rejected the API key."
-                    )
+                # Retry a transient failure (403 just-created key not yet
+                # propagated, 429 brief rate limit) on the SAME key with backoff
+                # before giving up on it. A permanent reject (401/402) rotates
+                # immediately — retrying a bad key only wastes time.
+                rotate = False
+                for attempt in range(HIGHLIGHTS_MAX_ATTEMPTS):
+                    try:
+                        response = await client.post(
+                            config.generate_content_url,
+                            headers={
+                                "content-type": "application/json",
+                                "x-goog-api-key": keys[key_index],
+                            },
+                            json=request_body,
+                        )
+                    except httpx.HTTPError as error:
+                        raise WorkerError(
+                            "HIGHLIGHTS_UNREACHABLE",
+                            "Gemini could not be reached for AI Moments.",
+                            status_code=502,
+                            retryable=True,
+                            details=str(error),
+                        ) from error
+                    if providers.is_key_permanent_reject(response.status_code):
+                        last_rotate_error = gateway_response_error(
+                            response, "HIGHLIGHTS_FAILED", "Gemini rejected the API key."
+                        )
+                        rotate = True
+                        break
+                    if providers.is_key_transient_status(response.status_code):
+                        last_rotate_error = gateway_response_error(
+                            response, "HIGHLIGHTS_FAILED", "Gemini temporarily rejected the API key."
+                        )
+                        if attempt + 1 >= HIGHLIGHTS_MAX_ATTEMPTS:
+                            # Same-key retries spent; rotate to the next key.
+                            rotate = True
+                            break
+                        await asyncio.sleep(_transcription_retry_delay(response, attempt))
+                        response = None
+                        continue
+                    break
+                if rotate:
                     key_index += 1
                     response = None
                     continue
@@ -1477,6 +1585,115 @@ async def request_highlights_byok(project: Project, settings: ProjectSettings) -
                 raise WorkerError(
                     "HIGHLIGHTS_RESPONSE_INVALID",
                     "Gemini returned malformed highlight output.",
+                    status_code=502,
+                    retryable=True,
+                    details=str(error),
+                ) from error
+            candidates.extend(
+                providers.validate_window_candidates(
+                    clips,
+                    window,
+                    project.durationSeconds,
+                    settings.duration.minSeconds,
+                    settings.duration.maxSeconds,
+                )
+            )
+    kept = providers.rank_and_dedupe_candidates(candidates, settings.clipCount)
+    if not kept:
+        raise WorkerError("NO_VALID_HIGHLIGHTS", "No valid highlight candidates were found.", retryable=True)
+    return kept
+
+
+async def request_highlights_openai(project: Project, settings: ProjectSettings) -> list[Candidate]:
+    """Run highlight detection through an OpenAI-compatible endpoint (9router)."""
+    configuration_error = providers.openai_highlights_configuration_error()
+    if configuration_error:
+        raise configuration_error
+    transcript = project.transcript
+    if transcript is None or not transcript.segments:
+        raise WorkerError("TRANSCRIPT_REQUIRED", "Prepare the project before analyzing highlights.", status_code=409)
+    keys = providers.openrouter_api_keys()
+    windows = providers.create_highlight_windows(transcript.segments, project.durationSeconds)
+    if not windows:
+        raise WorkerError(
+            "EMPTY_TIMED_TRANSCRIPT",
+            "No timed transcript content overlaps the source.",
+            status_code=422,
+        )
+    settings_payload = {
+        "clipCount": settings.clipCount,
+        "minDurationSeconds": settings.duration.minSeconds,
+        "maxDurationSeconds": settings.duration.maxSeconds,
+        "language": settings.language,
+    }
+    candidates: list[Candidate] = []
+    key_index = 0
+    last_rotate_error: WorkerError | None = None
+    async with httpx.AsyncClient(timeout=httpx.Timeout(240.0)) as client:
+        for window in windows:
+            config = providers.openrouter_config(keys[key_index] if key_index < len(keys) else "")
+            request_body = providers.build_openai_highlight_request(
+                window, project.durationSeconds, settings_payload
+            )
+            request_body["model"] = config.model
+            response = None
+            while key_index < len(keys):
+                config = providers.openrouter_config(keys[key_index])
+                request_body["model"] = config.model
+                rotate = False
+                for attempt in range(HIGHLIGHTS_MAX_ATTEMPTS):
+                    try:
+                        response = await client.post(
+                            config.chat_completions_url,
+                            headers=providers.openai_headers(keys[key_index]),
+                            json=request_body,
+                        )
+                    except httpx.HTTPError as error:
+                        raise WorkerError(
+                            "HIGHLIGHTS_UNREACHABLE",
+                            "The 9router endpoint could not be reached for AI Moments.",
+                            status_code=502,
+                            retryable=True,
+                            details=str(error),
+                        ) from error
+                    if providers.is_key_permanent_reject(response.status_code):
+                        last_rotate_error = gateway_response_error(
+                            response, "HIGHLIGHTS_FAILED", "9router rejected the API key."
+                        )
+                        rotate = True
+                        break
+                    if providers.is_key_transient_status(response.status_code):
+                        last_rotate_error = gateway_response_error(
+                            response, "HIGHLIGHTS_FAILED", "9router temporarily rejected the API key."
+                        )
+                        if attempt + 1 >= HIGHLIGHTS_MAX_ATTEMPTS:
+                            rotate = True
+                            break
+                        await asyncio.sleep(_transcription_retry_delay(response, attempt))
+                        response = None
+                        continue
+                    break
+                if rotate:
+                    key_index += 1
+                    response = None
+                    continue
+                break
+            if response is None:
+                raise WorkerError(
+                    "HIGHLIGHTS_KEYS_EXHAUSTED",
+                    "Every configured 9router API key was rate-limited or rejected.",
+                    status_code=502,
+                    retryable=True,
+                    details=last_rotate_error.details if last_rotate_error else None,
+                )
+            if response.status_code >= 400:
+                raise gateway_response_error(response, "HIGHLIGHTS_FAILED", "9router highlight analysis failed.")
+            try:
+                clips = providers.extract_openai_clips(response.json())
+            except (ValueError, TypeError) as error:
+                raise WorkerError(
+                    "HIGHLIGHTS_RESPONSE_INVALID",
+                    "9router returned malformed highlight output.",
                     status_code=502,
                     retryable=True,
                     details=str(error),
@@ -1550,6 +1767,53 @@ def highlight_segment_payload(segment: TranscriptSegment) -> dict[str, str | flo
         "startSeconds": segment.startSeconds,
         "endSeconds": segment.endSeconds,
     }
+
+
+HW_ENCODERS = ("h264_amf", "h264_nvenc", "h264_qsv")
+
+ENCODER_PARAMS: dict[str, list[str]] = {
+    "libx264": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p"],
+    "h264_amf": ["-c:v", "h264_amf", "-usage", "transcoding", "-quality", "quality", "-qp_i", "22", "-qp_p", "22", "-pix_fmt", "yuv420p"],
+    "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "22", "-rc", "vbr", "-pix_fmt", "yuv420p"],
+    "h264_qsv": ["-c:v", "h264_qsv", "-preset", "medium", "-global_quality", "22", "-pix_fmt", "nv12"],
+}
+
+_encoder_cache: list[str] | None = None
+
+
+async def detect_encoders(executable: str) -> list[str]:
+    global _encoder_cache
+    if _encoder_cache is not None:
+        return _encoder_cache
+
+    def _run() -> list[str]:
+        import subprocess
+        try:
+            kwargs = {"capture_output": True, "text": True, "timeout": 15}
+            if os.name == "nt":
+                kwargs["creationflags"] = 0x08000000
+            result = subprocess.run([executable, "-hide_banner", "-encoders"], **kwargs)
+            output = result.stdout + result.stderr
+        except Exception:
+            return []
+        available: list[str] = []
+        for name in ENCODER_PARAMS:
+            if name in output:
+                available.append(name)
+        return available
+
+    _encoder_cache = await asyncio.to_thread(_run)
+    return _encoder_cache
+
+
+def resolve_encoder(available: list[str], desired: str) -> str:
+    if desired in available:
+        return desired
+    if desired == "auto":
+        for hw in HW_ENCODERS:
+            if hw in available:
+                return hw
+    return "libx264"
 
 
 def output_filter(layout: str, command_file_name: str | None = None) -> str:
@@ -1684,15 +1948,8 @@ async def render_one_clip(
             if expression
         )
         command += ["-map", "0:v:0", "-map", "0:a:0?", "-vf", video_filter]
+    command += ENCODER_PARAMS["libx264"]
     command += [
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "22",
-        "-pix_fmt",
-        "yuv420p",
         "-c:a",
         "aac",
         "-b:a",
@@ -1701,6 +1958,41 @@ async def render_one_clip(
         "+faststart",
         str(temporary),
     ]
+
+    available_encoders = await detect_encoders(executable)
+    encoder = resolve_encoder(available_encoders, settings.encoder)
+    if encoder != "libx264":
+        encoder_command = command.copy()
+        encoder_params = ENCODER_PARAMS[encoder]
+        codec_idx = encoder_command.index("-c:v") if "-c:v" in encoder_command else -1
+        if codec_idx >= 0:
+            encoder_command[codec_idx : codec_idx + len(ENCODER_PARAMS["libx264"])] = encoder_params
+        try:
+            if job is not None:
+                await set_job_progress(job, _clip_progress(index, total, 0.6), f"encoding clip {index} of {total} ({encoder})")
+            code, _, stderr = await run_command(*encoder_command, cwd=str(project_dir))
+            if code == 0 and temporary.exists():
+                os.replace(temporary, output_path)
+                output_id = str(uuid.uuid4())
+                try:
+                    rendered_metadata = await probe_media(output_path)
+                    rendered_duration = float(rendered_metadata["durationSeconds"])
+                except WorkerError:
+                    rendered_duration = duration
+                return RenderOutput(
+                    id=output_id,
+                    clipId=clip.id,
+                    fileName=file_name,
+                    path=str(output_path),
+                    mediaUrl=f"/api/projects/{project.id}/outputs/{output_id}",
+                    durationSeconds=rendered_duration,
+                    status="succeeded",
+                    clipRevision=clip.revision,
+                )
+            temporary.unlink(missing_ok=True)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+
     if job is not None:
         await set_job_progress(job, _clip_progress(index, total, 0.6), f"encoding clip {index} of {total}")
     code, _, stderr = await run_command(*command, cwd=str(project_dir))
@@ -2005,3 +2297,9 @@ async def stream_output(
     response = _stream_local_file(path, request, output.fileName)
     response.headers["Content-Disposition"] = f'{"attachment" if download else "inline"}; filename="{output.fileName}"'
     return response
+
+
+_web_dist = os.getenv("CUTTOCLIP_WEB_DIST", "").strip()
+if _web_dist and Path(_web_dist).is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=_web_dist, html=True), name="spa")

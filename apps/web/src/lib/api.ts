@@ -16,7 +16,16 @@ import type {
   YoutubeCacheInventory,
 } from "../types";
 
-const workerBase = (import.meta.env.VITE_WORKER_URL ?? "http://127.0.0.1:4317/api").replace(/\/$/, "");
+// Desktop (Tauri) talks to the bundled worker on localhost. In a browser served
+// through the tunnel/domain, the worker sits same-origin behind /api — hitting
+// 127.0.0.1 there would target the tester's own machine (and break on mixed
+// content over HTTPS). VITE_WORKER_URL still overrides both when set at build.
+function defaultWorkerBase(): string {
+  if (import.meta.env.VITE_WORKER_URL) return import.meta.env.VITE_WORKER_URL;
+  const isDesktopHost = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  return isDesktopHost ? "http://127.0.0.1:4317/api" : "/api";
+}
+const workerBase = defaultWorkerBase().replace(/\/$/, "");
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === "true";
 
 const terminalStatuses = new Set<JobStatus>(["succeeded", "partial", "failed", "cancelled", "interrupted"]);
@@ -391,9 +400,9 @@ const demoJobs = new Map<string, Job>();
 const demoJobPayloads = new Map<string, unknown>();
 
 const demoCandidates: HighlightCandidate[] = [
-  { id: "clip-01", startSeconds: 412, endSeconds: 458, title: "The uncomfortable growth loop", hook: "Most creators stop right before the useful part.", reason: "Clear tension, concrete payoff, and a strong opening sentence.", score: 96, accent: "coral", source: "ai", revision: 0, presentation: { layout: "smart_portrait", captionPreset: "bold_focus" } },
-  { id: "clip-02", startSeconds: 781, endSeconds: 836, title: "Ship the tiny version", hook: "Your first version should feel almost embarrassingly small.", reason: "Self-contained idea with a memorable contrast and clean ending.", score: 91, accent: "mint", source: "ai", revision: 0, presentation: { layout: "smart_portrait", captionPreset: "bold_focus" } },
-  { id: "clip-03", startSeconds: 1094, endSeconds: 1145, title: "A better creative brief", hook: "The brief is not paperwork; it is your first edit.", reason: "Strong quotable line and an actionable takeaway.", score: 88, accent: "violet", source: "ai", revision: 0, presentation: { layout: "smart_portrait", captionPreset: "bold_focus" } },
+  { id: "clip-01", startSeconds: 412, endSeconds: 458, title: "The uncomfortable growth loop", hook: "Most creators stop right before the useful part.", reason: "Clear tension, concrete payoff, and a strong opening sentence.", score: 96, accent: "coral", source: "ai", revision: 0, presentation: { layout: "portrait", captionPreset: "bold_focus" } },
+  { id: "clip-02", startSeconds: 781, endSeconds: 836, title: "Ship the tiny version", hook: "Your first version should feel almost embarrassingly small.", reason: "Self-contained idea with a memorable contrast and clean ending.", score: 91, accent: "mint", source: "ai", revision: 0, presentation: { layout: "portrait", captionPreset: "bold_focus" } },
+  { id: "clip-03", startSeconds: 1094, endSeconds: 1145, title: "A better creative brief", hook: "The brief is not paperwork; it is your first edit.", reason: "Strong quotable line and an actionable takeaway.", score: 88, accent: "violet", source: "ai", revision: 0, presentation: { layout: "portrait", captionPreset: "bold_focus" } },
 ];
 
 function toProjectSummary(project: Project): ProjectSummary {

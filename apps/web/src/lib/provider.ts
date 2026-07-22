@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { InstallationIdentity, ProviderActionResult, ProviderMode } from "../types";
+import type { BootstrapStatus, InstallationIdentity, ProviderActionResult, ProviderMode } from "../types";
 import { isDemoMode } from "./api";
 
 /**
@@ -60,6 +60,34 @@ export function setProviderMode(mode: ProviderMode): Promise<ProviderActionResul
 
 export function restartWorker(): Promise<ProviderActionResult> {
   return invokeCommand("restart_worker", {});
+}
+
+// --- Runtime bootstrap (Track C2/C3) ---
+//
+// On the desktop host the worker runs as a downloaded local runtime, not a
+// bundled sidecar. First launch must: check bootstrap_status -> download the
+// runtime (install_runtime) if missing -> start_worker. These return data or
+// throw, so they don't use the invokeCommand wrapper (which discards results).
+
+export async function getBootstrapStatus(): Promise<BootstrapStatus | null> {
+  if (isDemoMode || !isDesktop()) return null;
+  try {
+    return await invoke<BootstrapStatus>("bootstrap_status", {});
+  } catch {
+    return null;
+  }
+}
+
+export function installRuntime(): Promise<void> {
+  return invoke("install_runtime", {});
+}
+
+export function cancelRuntimeInstall(): Promise<void> {
+  return invoke("cancel_runtime_install", {});
+}
+
+export function startWorker(): Promise<void> {
+  return invoke("start_worker", {});
 }
 
 /**

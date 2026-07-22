@@ -4,6 +4,7 @@ export const initialSettings: ProjectSettings = {
   clipCount: 3,
   duration: { minSeconds: 15, maxSeconds: 90 },
   language: "auto",
-  layout: "smart_portrait",
+  layout: "portrait",
   captionPreset: "bold_focus",
+  encoder: "auto",
 };

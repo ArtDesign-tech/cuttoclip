@@ -48,6 +48,7 @@ export type ProjectSettings = {
   language: "auto" | string;
   layout: Layout;
   captionPreset: CaptionPreset;
+  encoder: "auto" | "libx264" | "h264_amf" | "h264_nvenc" | "h264_qsv";
 };
 
 export type RenderOutput = {
@@ -137,6 +138,15 @@ export type WorkerHealth = {
   service?: string;
 };
 
+export type BootstrapStatus = {
+  state: "not-installed" | "installed" | "outdated";
+  installedVersion?: string | null;
+  requiredVersion?: string | null;
+  runtimeDir?: string | null;
+  workerRunning: boolean;
+  workerBaseUrl?: string | null;
+};
+
 export type ProviderMode = "managed" | "byok";
 
 export type ProviderSlot = {
@@ -158,6 +168,7 @@ export type SystemCapabilities = {
   ffprobe: boolean;
   ytDlp: boolean;
   encoders: string[];
+  defaultEncoder?: string;
   vision: string | boolean;
   providerMode?: ProviderMode;
   providerConfigured?: boolean;

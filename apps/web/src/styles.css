@@ -551,3 +551,11 @@ h1, h2, h3, p { margin: 0; }
 .cache-empty { min-height: 100px; display: grid; place-items: center; padding: 20px; color: var(--muted); font-size: 11px; text-align: center; }.cache-manager .inline-error { margin: 12px 20px 0; }.cache-manager footer { border-top: 1px solid var(--line-soft); border-bottom: 0; }.cache-manager footer > span { color: var(--slate); font-size: 10px; }.cache-clean { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; color: #15171d; border-radius: 8px; background: var(--signal); font-size: 10px; font-weight: 750; }.cache-clean:disabled { cursor: not-allowed; opacity: .45; }
 .demo-storage-note { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 18px; padding: 10px; color: #b9c8ae; border: 1px solid rgba(184,232,115,.12); border-radius: 8px; background: rgba(184,232,115,.035); font-size: 10px; line-height: 1.45; }.demo-storage-note svg { flex: 0 0 auto; margin-top: 1px; }
 @media (max-width: 600px) { .cache-manager > header { grid-template-columns: auto minmax(0,1fr); }.cache-manager header > strong { grid-column: 2; font-size: 15px; }.cache-manager footer { align-items: stretch; flex-direction: column; padding-block: 12px; }.cache-clean { justify-content: center; }.video-stage.layout-portrait,.video-stage.layout-smart_portrait,.video-stage.layout-gaming_portrait { height: min(58vh,560px); } }
+
+/* First-launch runtime bootstrap screen */
+.bootstrap-screen { max-width: 460px; margin: auto; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 40px 24px; text-align: center; }
+.bootstrap-spinner { width: 34px; height: 34px; border: 3px solid var(--line); border-top-color: var(--signal); border-radius: 50%; animation: bootstrap-spin 0.9s linear infinite; }
+@keyframes bootstrap-spin { to { transform: rotate(360deg); } }
+.bootstrap-title { color: var(--paper); font-size: 19px; font-weight: 650; }
+.bootstrap-copy { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.bootstrap-copy.bootstrap-error { color: var(--danger); }

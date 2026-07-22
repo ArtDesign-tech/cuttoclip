@@ -29,12 +29,14 @@ except ImportError:  # PyInstaller can execute the worker entrypoint as a script
     from models import Candidate, TranscriptSegment
 
 
-ProviderMode = Literal["managed", "byok"]
+ProviderMode = Literal["managed", "byok", "openai"]
 
 DEFAULT_GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_OPENAI_MODEL = "gemini/gemini-2.5-flash"
+DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:4000/v1"
 
 HIGHLIGHT_WINDOW_SECONDS = 12 * 60
 HIGHLIGHT_OVERLAP_SECONDS = 30
@@ -51,7 +53,11 @@ def provider_mode() -> ProviderMode:
     """
 
     raw = os.getenv("CUTTOCLIP_PROVIDER_MODE", "").strip().lower()
-    return "byok" if raw == "byok" else "managed"
+    if raw == "byok":
+        return "byok"
+    if raw == "openai":
+        return "openai"
+    return "managed"
 
 
 @dataclass(frozen=True)
@@ -74,14 +80,45 @@ class GeminiConfig:
         return f"{self.base_url.rstrip('/')}/models/{self.model}:generateContent"
 
 
-# HTTP statuses that mean "this key is exhausted/rejected" — rotate to the next
-# key rather than retrying the same one. 401/403 = invalid/revoked key,
-# 402 = quota/billing, 429 = rate limit. Temp/free-tier keys hit these often.
-KEY_ROTATE_STATUSES = frozenset({401, 402, 403, 429})
+@dataclass(frozen=True)
+class OpenRouterConfig:
+    """OpenAI-compatible Chat Completions endpoint (9router / OpenRouter / custom)."""
+
+    api_key: str
+    base_url: str
+    model: str
+
+    @property
+    def chat_completions_url(self) -> str:
+        return f"{self.base_url.rstrip('/')}/chat/completions"
+
+
+# A key can be rejected two very different ways.
+#
+# Permanent: the key itself is bad — 401 invalid/revoked, 402 quota/billing
+# exhausted. Retrying the same key is futile; rotate to the next one at once.
+KEY_PERMANENT_REJECT_STATUSES = frozenset({401, 402})
+
+# Transient: a *valid* key that momentarily fails — 403 right after creation
+# before Google finishes propagating it, or 429 a brief rate limit. These clear
+# on their own, so retry the same key with backoff first and only rotate once
+# its retries are spent. This is what stops a single configured key from failing
+# the whole job on one stray 403.
+KEY_TRANSIENT_STATUSES = frozenset({403, 429})
+
+
+def is_key_permanent_reject(status_code: int) -> bool:
+    return status_code in KEY_PERMANENT_REJECT_STATUSES
+
+
+def is_key_transient_status(status_code: int) -> bool:
+    return status_code in KEY_TRANSIENT_STATUSES
 
 
 def is_key_rotate_status(status_code: int) -> bool:
-    return status_code in KEY_ROTATE_STATUSES
+    # Any status that ultimately leads to rotation — immediately for a permanent
+    # reject, or after retries for a transient one.
+    return is_key_permanent_reject(status_code) or is_key_transient_status(status_code)
 
 
 def _parse_key_list(plural_var: str, singular_var: str) -> list[str]:
@@ -132,6 +169,35 @@ def gemini_config(api_key: str = "") -> GeminiConfig:
         model=os.getenv("CUTTOCLIP_GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL,
         base_url=os.getenv("CUTTOCLIP_GEMINI_BASE_URL", "").strip() or DEFAULT_GEMINI_BASE_URL,
     )
+
+
+def openrouter_api_keys() -> list[str]:
+    """API keys for the OpenAI-compatible highlights endpoint (9router)."""
+    return _parse_key_list("CUTTOCLIP_OPENAI_API_KEYS", "CUTTOCLIP_OPENAI_API_KEY")
+
+
+def openrouter_config(api_key: str = "") -> OpenRouterConfig:
+    """OpenAI-compatible config for a specific key. Defaults to the first configured key."""
+
+    key = api_key or next(iter(openrouter_api_keys()), "")
+    return OpenRouterConfig(
+        api_key=key,
+        base_url=os.getenv("CUTTOCLIP_OPENAI_BASE_URL", "").strip() or DEFAULT_OPENAI_BASE_URL,
+        model=os.getenv("CUTTOCLIP_OPENAI_MODEL", "").strip() or DEFAULT_OPENAI_MODEL,
+    )
+
+
+def openai_highlights_configuration_error() -> WorkerError | None:
+    """Validate that an API key is present for the 9router/OpenAI highlights path."""
+
+    if not openrouter_api_keys():
+        return WorkerError(
+            "OPENAI_KEY_MISSING",
+            "A 9router API key is required for AI Moments in OpenAI mode.",
+            status_code=503,
+            retryable=False,
+        )
+    return None
 
 
 def byok_configuration_error() -> WorkerError | None:
@@ -385,3 +451,76 @@ def validate_window_candidates(
             continue
         validated.append(candidate)
     return validated
+
+
+# --- OpenAI-compatible (9router) highlight request/response ---
+
+
+def build_openai_highlight_request(
+    window: HighlightWindow,
+    source_duration_seconds: float,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Build an OpenAI Chat Completions request for highlight detection.
+
+    Uses a system message with the instruction and a user message with the
+    structured prompt (same window content as the Gemini path). The response
+    is constrained with ``response_format`` for JSON output.
+    """
+
+    prompt = {
+        "sourceDurationSeconds": source_duration_seconds,
+        "window": {"startSeconds": window.startSeconds, "endSeconds": window.endSeconds},
+        "settings": settings,
+        "segments": [
+            {
+                "text": segment.text,
+                "startSeconds": segment.startSeconds,
+                "endSeconds": segment.endSeconds,
+            }
+            for segment in window.segments
+        ],
+    }
+    return {
+        "messages": [
+            {"role": "system", "content": _HIGHLIGHT_SYSTEM_INSTRUCTION},
+            {"role": "user", "content": json.dumps(prompt)},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+
+
+def extract_openai_clips(payload: Any) -> list[dict[str, Any]]:
+    """Pull the ``clips`` array from an OpenAI Chat Completions response.
+
+    Accepts either ``{"clips": [...]}`` directly (if the model returned the
+    structured object) or the standard ``choices[0].message.content`` envelope
+    containing a JSON string.
+    """
+
+    if isinstance(payload, dict) and isinstance(payload.get("clips"), list):
+        return payload["clips"]
+
+    if not isinstance(payload, dict):
+        raise ValueError("OpenAI response is not a JSON object.")
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("OpenAI response has no choices array.")
+
+    first = choices[0]
+    message = first.get("message") if isinstance(first, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("OpenAI response message content is empty.")
+
+    parsed = json.loads(content)
+    clips = parsed.get("clips") if isinstance(parsed, dict) else None
+    if not isinstance(clips, list):
+        raise ValueError("OpenAI response has no clips array.")
+    return clips
+
+
+def openai_headers(api_key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}

@@ -10,7 +10,9 @@ export function useLayoutPreview(project: Project, clip: HighlightCandidate, onR
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const requestRef = useRef(0);
-  const aiLayout = clip.presentation.layout === "smart_portrait" || clip.presentation.layout === "gaming_portrait" ? clip.presentation.layout : null;
+  // Smart/Gaming portrait di-disable sementara (berat di PC lokal); layout AI apa pun
+  // yang masih tersisa di project lama diperlakukan non-AI agar tidak memicu analisis berat.
+  const aiLayout = null as "smart_portrait" | "gaming_portrait" | null;
   const isAiLayout = aiLayout !== null;
 
   useEffect(() => {

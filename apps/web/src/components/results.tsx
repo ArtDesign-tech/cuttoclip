@@ -15,9 +15,14 @@ export function ResultsScreen({ t, project, renderSelection, onEdit, onRetry, on
 function ResultCard({ t, project, clip, output, index, selected }: { t: T; project: Project; clip: HighlightCandidate; output?: RenderOutput; index: number; selected: boolean }) {
   const stale = Boolean(output && output.clipRevision !== clip.revision);
   const state = !output ? "notRendered" : output.status === "failed" ? "failed" : stale ? "stale" : "ready";
-  const canReveal = "__TAURI_INTERNALS__" in window && Boolean(output?.path);
+  const isDesktopHost = "__TAURI_INTERNALS__" in window;
+  const canReveal = isDesktopHost && Boolean(output?.path);
+  // The absolute local path is meaningful (and revealable) only on the desktop
+  // host. In the browser it would leak the operator's folder structure to a
+  // tester, so surface the clip's file name there instead.
+  const outputLabel = isDesktopHost ? (output?.path ?? "LOCAL") : (output?.fileName ?? "LOCAL");
   return <article className={`result-card panel result-${state}`}>
     <div className={`result-media layout-${clip.presentation.layout}`}>{output?.status === "succeeded" && output.mediaUrl ? <video controls preload="metadata" src={output.mediaUrl} /> : !isDemoMode && supportsWorkerFeature("frame-preview") ? <img src={projectFrameUrl(project.id, clip.startSeconds + 1, 640)} alt="" /> : <div className="result-demo"><SignalMark /></div>}<span className="result-number">{String(index + 1).padStart(2, "0")}</span><span className={`result-state state-${state}`}>{state === "ready" && <Check size={12} />}{t(`results.${state}`)}</span></div>
-    <div className="result-copy"><h3>{clip.title}</h3><p>{formatTime(clip.endSeconds - clip.startSeconds)} · {clip.presentation.layout.replace("_", " ")}</p>{output?.status === "failed" && <div className="result-error">{typeof output.error === "string" ? output.error : output.error?.message}</div>}<div className="result-footer"><div className="result-links">{output?.status === "succeeded" && output.mediaUrl ? <a href={`${output.mediaUrl}?download=true`}><Download size={14} />{t("results.download")}</a> : <span>{selected ? "Selected" : "Not selected"}</span>}{canReveal && <button onClick={() => void invoke("reveal_output", { path: output!.path })}>{t("results.showFolder")}</button>}</div><small>{output?.path ?? "LOCAL"}</small></div></div>
+    <div className="result-copy"><h3>{clip.title}</h3><p>{formatTime(clip.endSeconds - clip.startSeconds)} · {clip.presentation.layout.replace("_", " ")}</p>{output?.status === "failed" && <div className="result-error">{typeof output.error === "string" ? output.error : output.error?.message}</div>}<div className="result-footer"><div className="result-links">{output?.status === "succeeded" && output.mediaUrl ? <a href={`${output.mediaUrl}?download=true`}><Download size={14} />{t("results.download")}</a> : <span>{selected ? "Selected" : "Not selected"}</span>}{canReveal && <button onClick={() => void invoke("reveal_output", { path: output!.path })}>{t("results.showFolder")}</button>}</div><small>{outputLabel}</small></div></div>
   </article>;
 }

@@ -1,10 +1,10 @@
 import React from "react";
-import { AlertCircle, CheckCircle2, FileVideo, Layers3, Link2, Sparkles, Upload, WandSparkles, WifiOff } from "lucide-react";
+import { AlertCircle, CheckCircle2, FileVideo, Link2, Sparkles, Upload, WandSparkles, WifiOff } from "lucide-react";
 import type { ProjectSettings } from "../types";
 import type { ConnectionState, T } from "../app/types";
+import { isDesktop } from "../lib/provider";
 import { SignalMark } from "./common";
 import { isSupportedVideoFile, isValidYouTubeUrl } from "../hooks/useSourceForm";
-import { isDemoMode } from "../lib/api";
 
 type ReadinessTone = "ready" | "blocked" | "neutral";
 type Readiness = { tone: ReadinessTone; messageKey: string; detail?: string };
@@ -35,22 +35,22 @@ export function SourceScreen({ t, mode, setMode, source, setSource, localFile, s
   const ReadyIcon = readiness.tone === "ready" ? CheckCircle2 : readiness.tone === "blocked" ? (capabilityReady ? AlertCircle : WifiOff) : Sparkles;
   return <section className="source-screen content-width">
     <div className="source-hero">
-      <div><span className="eyebrow"><span />{t("source.eyebrow")}</span><h1>{t("source.title")}</h1><p>{t("source.copy")}</p></div>
+      <div><h1>{t("source.title")}</h1><p>{t("source.copy")}</p></div>
       <SignalMark />
     </div>
     <div className="source-workspace">
       <section className="panel source-panel">
-        <div className="segmented"><button className={mode === "youtube" ? "active" : ""} onClick={() => setMode("youtube")}><Link2 size={16} />{t("source.youtube")}</button><button className={mode === "file" ? "active" : ""} onClick={() => setMode("file")}><FileVideo size={16} />{t("source.file")}</button></div>
+        <div className="segmented"><button className={mode === "youtube" ? "active" : ""} onClick={() => setMode("youtube")}><Link2 size={16} />{t("source.youtube")}</button>{isDesktop() && <button className={mode === "file" ? "active" : ""} onClick={() => setMode("file")}><FileVideo size={16} />{t("source.file")}</button>}</div>
         {mode === "youtube" ? <label className="field-label"><span>{t("source.urlLabel")}</span><div className="url-input"><Link2 size={17} /><input value={source} onChange={(event) => setSource(event.target.value)} placeholder={t("source.urlPlaceholder")} aria-invalid={Boolean(sourceError)} /><button onClick={onPaste}>{t("source.paste")}</button></div></label> : <button className={`file-drop ${localFile ? "has-file" : ""}`} onClick={chooseFile}><span className="file-icon">{localFile ? <CheckCircle2 size={24} /> : <Upload size={24} />}</span><span><b>{localFile?.name ?? t("source.choose")}</b><small>{localFile ? `${(localFile.size / 1024 / 1024).toFixed(1)} MB · ${t("source.change")}` : t("source.dropHint")}</small></span></button>}
         <input ref={fileInputRef} className="visually-hidden" type="file" accept="video/mp4,video/quicktime,.mp4,.mov" aria-label={t("source.choose")} onChange={(event) => { const file = event.target.files?.[0]; if (file) onFile(file); }} />
         {sourceError && <div className="inline-error"><AlertCircle size={15} />{sourceError}</div>}
-        <div className="privacy-note"><Layers3 size={15} /><span>{t(isDemoMode ? "source.demoPrivate" : "source.private")}</span></div>
       </section>
       <section className="panel brief-panel">
         <div className="panel-heading"><span>{t("source.brief")}</span><Sparkles size={16} /></div>
         <SettingRow label={t("source.count")}><div className="stepper"><button onClick={() => update({ clipCount: Math.max(1, settings.clipCount - 1) })} aria-label="−">−</button><b>{settings.clipCount}</b><button onClick={() => update({ clipCount: Math.min(10, settings.clipCount + 1) })} aria-label="+">+</button></div></SettingRow>
         <SettingRow label={t("source.duration")}><select aria-label={t("source.duration")} value={settings.duration.maxSeconds} onChange={(event) => update({ duration: { ...settings.duration, maxSeconds: Number(event.target.value) } })}><option value={30}>15–30 sec</option><option value={60}>15–60 sec</option><option value={90}>15–90 sec</option></select></SettingRow>
         <SettingRow label={t("source.language")}><select aria-label={t("source.language")} value={settings.language} onChange={(event) => update({ language: event.target.value })}><option value="auto">{t("source.auto")}</option><option value="id">Bahasa Indonesia</option><option value="en">English</option><option value="ms">Bahasa Melayu</option></select></SettingRow>
+        {isDesktop() && <SettingRow label={t("source.encoder")}><select aria-label={t("source.encoder")} value={settings.encoder} onChange={(event) => update({ encoder: event.target.value as ProjectSettings["encoder"] })}><option value="auto">Auto ({encoderLabel(connection.capabilities?.defaultEncoder)})</option>{(connection.capabilities?.encoders ?? []).map((enc) => <option key={enc} value={enc}>{encoderLabel(enc)}</option>)}</select></SettingRow>}
       </section>
     </div>
     <div className={`source-launch ${readiness.tone === "ready" ? "is-ready" : ""}`}>
@@ -62,4 +62,10 @@ export function SourceScreen({ t, mode, setMode, source, setSource, localFile, s
 
 function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="setting-row"><label>{label}</label>{children}</div>;
+}
+
+function encoderLabel(enc: string | undefined): string {
+  if (!enc) return "libx264";
+  const labels: Record<string, string> = { libx264: "CPU (x264)", h264_amf: "AMD AMF", h264_nvenc: "NVIDIA NVENC", h264_qsv: "Intel QSV" };
+  return labels[enc] ?? enc;
 }

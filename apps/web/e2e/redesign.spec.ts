@@ -39,7 +39,7 @@ test("bilingual source, editor, tablet drawers, and results stay production-read
   const landscapeBounds = await portraitStage.boundingBox();
   expect(landscapeBounds).not.toBeNull();
   expect(landscapeBounds!.width / landscapeBounds!.height).toBeCloseTo(16 / 9, 2);
-  await page.getByRole("dialog").getByLabel("Frame").selectOption("smart_portrait");
+  await page.getByRole("dialog").getByLabel("Frame").selectOption("portrait");
   // Focus stays trapped inside the dialog.
   await expect.poll(async () => page.evaluate(() => document.querySelector(".clip-editor-dialog")?.contains(document.activeElement) ?? false)).toBe(true);
   await page.keyboard.press("Tab");

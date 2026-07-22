@@ -293,6 +293,25 @@ def test_is_key_rotate_status() -> None:
     assert not providers.is_key_rotate_status(200)
 
 
+def test_permanent_reject_vs_transient_split() -> None:
+    # 401/402 are permanent (bad/exhausted key) → rotate immediately.
+    assert providers.is_key_permanent_reject(401)
+    assert providers.is_key_permanent_reject(402)
+    assert not providers.is_key_permanent_reject(403)
+    assert not providers.is_key_permanent_reject(429)
+    # 403/429 are transient (valid key, momentary failure) → retry same key first.
+    assert providers.is_key_transient_status(403)
+    assert providers.is_key_transient_status(429)
+    assert not providers.is_key_transient_status(401)
+    assert not providers.is_key_transient_status(402)
+    # The two categories are disjoint and their union is the rotate set.
+    for status in (401, 402, 403, 429):
+        assert providers.is_key_permanent_reject(status) != providers.is_key_transient_status(status)
+        assert providers.is_key_rotate_status(status)
+    assert not providers.is_key_transient_status(500)
+    assert not providers.is_key_permanent_reject(500)
+
+
 def test_capability_report_counts_keys_without_leaking(monkeypatch) -> None:
     monkeypatch.setenv("CUTTOCLIP_PROVIDER_MODE", "byok")
     monkeypatch.setenv("CUTTOCLIP_GROQ_API_KEYS", "gsk-a,gsk-b,gsk-c")
@@ -319,12 +338,17 @@ def _groq_ok_payload() -> dict:
 
 
 @pytest.mark.asyncio
-async def test_transcription_rotates_to_next_key_on_429(monkeypatch, tmp_path: Path) -> None:
+async def test_transcription_retries_same_key_then_rotates_on_429(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CUTTOCLIP_PROVIDER_MODE", "byok")
     monkeypatch.setenv("CUTTOCLIP_GROQ_API_KEYS", "gsk-first,gsk-second")
     monkeypatch.setenv("CUTTOCLIP_GEMINI_API_KEY", "gem-any")
+    monkeypatch.setattr(main.asyncio, "sleep", _no_sleep)
 
+    # 429 is transient: the first key is retried up to TRANSCRIPTION_MAX_ATTEMPTS
+    # before rotating, so a brief rate limit no longer burns the key outright.
     client = FakeClient([
+        FakeResponse(429, {"error": {"code": "rate_limited", "message": "slow down"}}),
+        FakeResponse(429, {"error": {"code": "rate_limited", "message": "slow down"}}),
         FakeResponse(429, {"error": {"code": "rate_limited", "message": "slow down"}}),
         FakeResponse(200, _groq_ok_payload()),
     ])
@@ -335,7 +359,35 @@ async def test_transcription_rotates_to_next_key_on_429(monkeypatch, tmp_path: P
     transcript = await main.transcribe_audio(AudioChunk(audio, 0, 1), "auto")
 
     assert transcript.text == "hello"
-    # first key got 429 → rotated to second key which succeeded
+    # first key retried 3× on 429, then rotated to the second key which succeeded
+    assert [c["headers"]["Authorization"] for c in client.calls] == [
+        "Bearer gsk-first",
+        "Bearer gsk-first",
+        "Bearer gsk-first",
+        "Bearer gsk-second",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_transcription_rotates_immediately_on_permanent_reject(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CUTTOCLIP_PROVIDER_MODE", "byok")
+    monkeypatch.setenv("CUTTOCLIP_GROQ_API_KEYS", "gsk-first,gsk-second")
+    monkeypatch.setenv("CUTTOCLIP_GEMINI_API_KEY", "gem-any")
+
+    # 401 is a permanent reject: retrying the bad key is futile, so it rotates on
+    # the first response with no wasted attempts.
+    client = FakeClient([
+        FakeResponse(401, {"error": {"code": "invalid", "message": "bad key"}}),
+        FakeResponse(200, _groq_ok_payload()),
+    ])
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **_: client)
+
+    audio = tmp_path / "chunk.mp3"
+    audio.write_bytes(b"audio")
+    transcript = await main.transcribe_audio(AudioChunk(audio, 0, 1), "auto")
+
+    assert transcript.text == "hello"
+    assert len(client.calls) == 2  # one attempt on the bad key, then the good one
     assert client.calls[0]["headers"]["Authorization"] == "Bearer gsk-first"
     assert client.calls[1]["headers"]["Authorization"] == "Bearer gsk-second"
 
@@ -345,9 +397,14 @@ async def test_transcription_errors_when_all_keys_exhausted(monkeypatch, tmp_pat
     monkeypatch.setenv("CUTTOCLIP_PROVIDER_MODE", "byok")
     monkeypatch.setenv("CUTTOCLIP_GROQ_API_KEYS", "gsk-1,gsk-2")
     monkeypatch.setenv("CUTTOCLIP_GEMINI_API_KEY", "gem-any")
+    monkeypatch.setattr(main.asyncio, "sleep", _no_sleep)
 
+    # key1 permanently rejected (401, 1 call) → key2 transient (429, retried to
+    # exhaustion, 3 calls). Both keys spent → KEYS_EXHAUSTED after 4 calls.
     client = FakeClient([
         FakeResponse(401, {"error": {"code": "invalid", "message": "bad key"}}),
+        FakeResponse(429, {"error": {"code": "rate", "message": "limited"}}),
+        FakeResponse(429, {"error": {"code": "rate", "message": "limited"}}),
         FakeResponse(429, {"error": {"code": "rate", "message": "limited"}}),
     ])
     monkeypatch.setattr(main.httpx, "AsyncClient", lambda **_: client)
@@ -357,7 +414,7 @@ async def test_transcription_errors_when_all_keys_exhausted(monkeypatch, tmp_pat
     with pytest.raises(WorkerError, match="KEYS_EXHAUSTED|rate-limited or rejected") as info:
         await main.transcribe_audio(AudioChunk(audio, 0, 1), "auto")
     assert info.value.code == "TRANSCRIPTION_KEYS_EXHAUSTED"
-    assert len(client.calls) == 2  # one attempt per key, no wasted retries
+    assert len(client.calls) == 4  # 1 on the permanent-reject key + 3 on the transient one
 
 
 @pytest.mark.asyncio
@@ -396,14 +453,18 @@ def _gemini_ok_payload() -> dict:
 
 
 @pytest.mark.asyncio
-async def test_highlights_rotate_key_and_stick_to_it(monkeypatch) -> None:
+async def test_highlights_retry_transient_then_rotate_and_stick(monkeypatch) -> None:
     monkeypatch.setenv("CUTTOCLIP_PROVIDER_MODE", "byok")
     monkeypatch.setenv("CUTTOCLIP_GROQ_API_KEY", "gsk-any")
     monkeypatch.setenv("CUTTOCLIP_GEMINI_API_KEYS", "gem-first,gem-second")
+    monkeypatch.setattr(main.asyncio, "sleep", _no_sleep)
 
-    # First window: gem-first 429 → rotate to gem-second (ok). Second window must
-    # go straight to gem-second without retrying the dead key.
+    # First window: gem-first returns 429 on every attempt (transient, retried to
+    # exhaustion) → rotate to gem-second (ok). Second window must go straight to
+    # gem-second without ever retrying the spent key.
     client = FakeClient([
+        FakeResponse(429, {"error": {"code": "rate", "message": "limited"}}),
+        FakeResponse(429, {"error": {"code": "rate", "message": "limited"}}),
         FakeResponse(429, {"error": {"code": "rate", "message": "limited"}}),
         FakeResponse(200, _gemini_ok_payload()),
         FakeResponse(200, _gemini_ok_payload()),
@@ -419,10 +480,32 @@ async def test_highlights_rotate_key_and_stick_to_it(monkeypatch) -> None:
     kept = await main.request_highlights(project, ProjectSettings(clipCount=3))
 
     assert kept  # got candidates
-    assert client.calls[0]["headers"]["x-goog-api-key"] == "gem-first"
-    assert client.calls[1]["headers"]["x-goog-api-key"] == "gem-second"
-    # third call (second window) uses the surviving key, never gem-first again
-    assert client.calls[2]["headers"]["x-goog-api-key"] == "gem-second"
+    keys_used = [c["headers"]["x-goog-api-key"] for c in client.calls]
+    # gem-first retried 3× (transient), then gem-second for the rest of window 1
+    assert keys_used[:4] == ["gem-first", "gem-first", "gem-first", "gem-second"]
+    # second window uses the surviving key, never gem-first again
+    assert keys_used[4] == "gem-second"
+
+
+@pytest.mark.asyncio
+async def test_highlights_rotate_immediately_on_permanent_reject(monkeypatch) -> None:
+    monkeypatch.setenv("CUTTOCLIP_PROVIDER_MODE", "byok")
+    monkeypatch.setenv("CUTTOCLIP_GROQ_API_KEY", "gsk-any")
+    monkeypatch.setenv("CUTTOCLIP_GEMINI_API_KEYS", "gem-first,gem-second")
+
+    # 402 (billing/quota) is a permanent reject: gem-first rotates on the first
+    # response with no retries, gem-second succeeds.
+    client = FakeClient([
+        FakeResponse(402, {"error": {"code": "billing", "message": "no quota"}}),
+        FakeResponse(200, _gemini_ok_payload()),
+    ])
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda **_: client)
+
+    kept = await main.request_highlights(_ready_project(), ProjectSettings(clipCount=3))
+
+    assert kept
+    keys_used = [c["headers"]["x-goog-api-key"] for c in client.calls]
+    assert keys_used == ["gem-first", "gem-second"]  # one call per key, no retries
 
 
 @pytest.mark.asyncio
@@ -430,16 +513,20 @@ async def test_highlights_error_when_all_keys_exhausted(monkeypatch) -> None:
     monkeypatch.setenv("CUTTOCLIP_PROVIDER_MODE", "byok")
     monkeypatch.setenv("CUTTOCLIP_GROQ_API_KEY", "gsk-any")
     monkeypatch.setenv("CUTTOCLIP_GEMINI_API_KEYS", "gem-1,gem-2")
+    monkeypatch.setattr(main.asyncio, "sleep", _no_sleep)
 
+    # Both keys permanently rejected (401) → rotate immediately, one call each,
+    # then KEYS_EXHAUSTED.
     client = FakeClient([
-        FakeResponse(429, {"error": {"code": "rate", "message": "limited"}}),
-        FakeResponse(429, {"error": {"code": "rate", "message": "limited"}}),
+        FakeResponse(401, {"error": {"code": "invalid", "message": "bad"}}),
+        FakeResponse(401, {"error": {"code": "invalid", "message": "bad"}}),
     ])
     monkeypatch.setattr(main.httpx, "AsyncClient", lambda **_: client)
 
     with pytest.raises(WorkerError) as info:
         await main.request_highlights(_ready_project(), ProjectSettings(clipCount=3))
     assert info.value.code == "HIGHLIGHTS_KEYS_EXHAUSTED"
+    assert len(client.calls) == 2
 
 
 def _no_sleep(*_args, **_kwargs):

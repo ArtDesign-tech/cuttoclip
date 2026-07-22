@@ -3,5 +3,11 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  server: { port: 5173, strictPort: true },
+  server: {
+    port: 5173,
+    strictPort: true,
+    // Web mode calls the worker at same-origin /api. In dev the worker runs on
+    // :4317, so proxy /api there — otherwise fetches hit the vite server itself.
+    proxy: { "/api": { target: "http://127.0.0.1:4317", changeOrigin: true } },
+  },
 });

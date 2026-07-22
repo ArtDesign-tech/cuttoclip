@@ -8,7 +8,7 @@ const project: Project = {
   durationSeconds: 120,
   resolution: "1280 x 720",
   transcriptReady: true,
-  settings: { clipCount: 1, duration: { minSeconds: 15, maxSeconds: 90 }, language: "id", layout: "smart_portrait", captionPreset: "bold_focus" },
+  settings: { clipCount: 1, duration: { minSeconds: 15, maxSeconds: 90 }, language: "id", layout: "smart_portrait", captionPreset: "bold_focus", encoder: "auto" },
   candidates: [{ id: "clip-1", startSeconds: 10, endSeconds: 40, title: "Clip", hook: "Hook", reason: "Reason", score: 90, accent: "coral", source: "ai", presentation: { layout: "portrait", captionPreset: "karaoke" }, revision: 3 }],
   outputs: [],
   revision: 2,

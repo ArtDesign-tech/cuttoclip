@@ -4,7 +4,7 @@ import type { Job, JobError, Project } from "../types";
 
 const stubProject = (id: string): Project => ({
   id, sourceLabel: id, sourceKind: "file", durationSeconds: 100, resolution: "1280 x 720",
-  transcriptReady: false, settings: { clipCount: 1, duration: { minSeconds: 15, maxSeconds: 90 }, language: "auto", layout: "smart_portrait", captionPreset: "bold_focus" },
+  transcriptReady: false, settings: { clipCount: 1, duration: { minSeconds: 15, maxSeconds: 90 }, language: "auto", layout: "smart_portrait", captionPreset: "bold_focus", encoder: "auto" },
   candidates: [], outputs: [], revision: 0,
 });
 

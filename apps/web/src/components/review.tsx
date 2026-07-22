@@ -14,9 +14,8 @@ const captionOptions = (): [string, string][] => {
 };
 
 const layoutOptions = (): [Layout, string][] => {
-  const options: [Layout, string][] = [["smart_portrait", "Smart Portrait — AI follow · 9:16"]];
-  if (supportsWorkerFeature("gaming-portrait-facecam")) options.push(["gaming_portrait", "Gaming — facecam + gameplay · 9:16"]);
-  options.push(["portrait", "Portrait — center crop · 9:16"], ["landscape", "Landscape — fit · 16:9"]);
+  // Smart/Gaming portrait (AI face tracking) di-hide sementara: terlalu berat di PC lokal.
+  const options: [Layout, string][] = [["portrait", "Portrait — center crop · 9:16"], ["landscape", "Landscape — fit · 16:9"]];
   return options;
 };
 import { clamp, formatTime, parseTimecode } from "../app/time";
@@ -159,7 +158,24 @@ function MediaEditor({ t, project, clip, updateClip, onRestoreSource }: { t: T; 
   };
   const activeWords = project.transcript?.words.filter((word) => word.startSeconds >= clip.startSeconds && word.endSeconds <= clip.endSeconds) ?? [];
   const activeIndex = activeWords.findIndex((word) => currentTime >= word.startSeconds && currentTime <= word.endSeconds + .12);
-  const captionWords = activeWords.slice(Math.max(0, activeIndex - 2), Math.max(5, activeIndex + 4));
+  // Group words into fixed cues (mirrors the worker's caption grouping) instead
+  // of a sliding window. Within a cue the words are constant, so only the
+  // highlight moves — the line layout stays put instead of reflowing on every
+  // word. This also makes the preview match the rendered .ass output.
+  const captionWords = useMemo(() => {
+    const limit = clip.presentation.layout === "landscape" ? 10 : 6;
+    type Word = (typeof activeWords)[number];
+    const cues: Word[][] = [];
+    let current: Word[] = [];
+    for (const word of activeWords) {
+      if (current.length && word.startSeconds - current[current.length - 1].endSeconds > 1.2) { cues.push(current); current = []; }
+      current.push(word);
+      if (current.length >= limit || (current.length >= 3 && /[.!?]["']?$/.test(word.text))) { cues.push(current); current = []; }
+    }
+    if (current.length) cues.push(current);
+    if (activeIndex < 0) return cues[0] ?? [];
+    return cues.find((cue) => cue.includes(activeWords[activeIndex])) ?? cues[0] ?? [];
+  }, [activeWords, activeIndex, clip.presentation.layout]);
   const preview = useLayoutPreview(project, clip, onRestoreSource);
   const showVideo = !isDemoMode && supportsWorkerFeature("source-stream") && Boolean(project.sourcePath);
   const statusKey = preview.status === "analyzing" ? "review.previewAnalyzing" : preview.status === "accurate" ? "review.previewAccurate" : preview.status === "failed" ? "review.previewFailed" : preview.status === "source_missing" ? "review.previewSourceMissing" : preview.status === "restoring" ? "review.previewRestoring" : "review.previewInstant";

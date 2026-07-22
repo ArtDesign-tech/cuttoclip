@@ -6,6 +6,7 @@ import type { ProjectSummary } from "./types";
 import type { AppView, ProjectTab } from "./app/types";
 import { initialWorkflow, workflowReducer } from "./app/workflow";
 import { LAST_PROJECT_TAB_PREFIX, LOCALE_KEY, ONBOARDING_SKIPPED_KEY, SIDEBAR_COLLAPSED_KEY } from "./app/storage";
+import { useBootstrap } from "./hooks/useBootstrap";
 import { useConnection } from "./hooks/useConnection";
 import { useProjectLibrary } from "./hooks/useProjectLibrary";
 import { useSourceForm } from "./hooks/useSourceForm";
@@ -38,6 +39,7 @@ export default function App() {
   const t = useCallback((key: TranslationKey | string, params?: Record<string, string | number>) => translate(locale, key, params), [locale]);
 
   const { connection, loadConnection } = useConnection();
+  const { bootstrap, retryBootstrap } = useBootstrap(loadConnection);
   const library = useProjectLibrary(connection.status);
   const sourceForm = useSourceForm();
   const session = useProjectSession({ project: workflow.project, dispatch, connectionStatus: connection.status, t, setSettings: sourceForm.setSettings, upsertSummary: library.upsertSummary });
@@ -57,7 +59,7 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.lang = locale;
-    document.title = isDemoMode ? "CutToClip Demo" : "CutToClip â€” Local AI clipping studio";
+    document.title = "CutToClip";
     window.localStorage.setItem(LOCALE_KEY, locale);
   }, [locale]);
 
@@ -154,6 +156,30 @@ export default function App() {
   const skipOnboarding = () => { setForceOnboarding(false); setOnboardingSkipped(true); window.localStorage.setItem(ONBOARDING_SKIPPED_KEY, "true"); };
   const manageProvider = () => { setForceOnboarding(true); };
   const showProjectDetails = view === "project" && Boolean(project);
+
+  // Desktop first launch: the worker runtime (~250MB) is downloaded and started
+  // before anything else can connect. Show a dedicated screen while that runs,
+  // and stay on it if it fails so the user isn't dropped into a dead app.
+  if (bootstrap.phase !== "ready" && bootstrap.phase !== "idle") {
+    const isError = bootstrap.phase === "error";
+    return (
+      <div className="app-shell onboarding-shell">
+        <main className="app-main stage-onboarding">
+          <div className="bootstrap-screen" role="status" aria-live="polite">
+            {!isError && <div className="bootstrap-spinner" aria-hidden="true" />}
+            <h1 className="bootstrap-title">{t(`bootstrap.${bootstrap.phase}`)}</h1>
+            {bootstrap.phase === "installing" && <p className="bootstrap-copy">{t("bootstrap.installingCopy")}</p>}
+            {isError && (
+              <>
+                <p className="bootstrap-copy bootstrap-error">{bootstrap.error}</p>
+                <button className="primary-button" onClick={() => void retryBootstrap()}>{t("bootstrap.retry")}</button>
+              </>
+            )}
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   if (showOnboarding) {
     return (

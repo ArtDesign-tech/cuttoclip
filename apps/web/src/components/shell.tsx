@@ -28,7 +28,7 @@ export function Sidebar({ t, view, project, summaries, libraryState, mobileOpen,
     <button className="sidebar-new" onClick={onNew} title={t("app.newProject")} aria-current={view === "create" ? "page" : undefined}><Plus size={17} /><span>{t("app.newProject")}</span><kbd>N</kbd></button>
     <div className="sidebar-workspace"><span className="sidebar-section-label">{t("sidebar.workspace")}</span><nav className="sidebar-primary"><button className={view === "projects" ? "active" : ""} onClick={onProjects} aria-current={view === "projects" ? "page" : undefined}><FolderOpen size={17} /><span>{t("sidebar.allProjects")}</span><small>{summaries.length}</small></button></nav></div>
     <section className="sidebar-recent" aria-labelledby="recent-projects-title"><header><span id="recent-projects-title" className="sidebar-section-label">{t("sidebar.recent")}</span>{summaries.length > 0 && <button onClick={onProjects}>{t("sidebar.viewAll")}</button>}</header>{projectList}</section>
-    <div className="sidebar-footer"><div className={`sidebar-worker worker-${connection.status}`} title={connection.error}><i /><span><b>{t(connectionKey)}</b><small>{t("sidebar.systemStatus")}</small></span></div><button className={view === "settings" ? "sidebar-settings active" : "sidebar-settings"} onClick={onSettings}><Settings2 size={17} /><span>{t("sidebar.settings")}</span></button></div>
+    <div className="sidebar-footer"><div className={`sidebar-worker worker-${connection.status}`} title={connection.error}><i /><span><b>{t(connectionKey)}</b></span></div><button className={view === "settings" ? "sidebar-settings active" : "sidebar-settings"} onClick={onSettings}><Settings2 size={17} /><span>{t("sidebar.settings")}</span></button></div>
   </aside>;
 }
 
