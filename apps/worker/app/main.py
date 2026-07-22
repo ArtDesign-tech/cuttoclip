@@ -997,6 +997,9 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
             "quiet": True,
             "no_warnings": True,
         }
+        cookies = os.getenv("YTDLP_COOKIES", "")
+        if cookies and os.path.isfile(cookies):
+            inspect_options["cookiefile"] = cookies
         if deno:
             inspect_options["js_runtimes"] = {"deno": {"path": deno}}
         try:
@@ -1038,6 +1041,9 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
             "no_warnings": True,
             "progress_hooks": [stop_cancelled_download],
         }
+        cookies = os.getenv("YTDLP_COOKIES", "")
+        if cookies and os.path.isfile(cookies):
+            options["cookiefile"] = cookies
         ffmpeg_location = _bundled_ffmpeg_location()
         if ffmpeg_location:
             options["ffmpeg_location"] = ffmpeg_location
