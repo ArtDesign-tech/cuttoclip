@@ -34,6 +34,7 @@ class ProjectSettings(WorkerModel):
     language: str = Field("auto", min_length=1, max_length=32)
     layout: Literal["portrait", "landscape", "smart_portrait", "gaming_portrait"] = "smart_portrait"
     captionPreset: CaptionPresetName = "bold_focus"
+    encoder: Literal["auto", "libx264", "h264_amf", "h264_nvenc", "h264_qsv"] = "auto"
 
 
 class ClipPresentation(WorkerModel):
