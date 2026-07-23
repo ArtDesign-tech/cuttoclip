@@ -1821,10 +1821,10 @@ _GPU_DEVICE_CHECKS: dict[str, str] = {
 }
 
 ENCODER_PARAMS: dict[str, list[str]] = {
-    "libx264": ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"],
-    "h264_amf": ["-c:v", "h264_amf", "-usage", "transcoding", "-quality", "quality", "-qp_i", "18", "-qp_p", "18", "-pix_fmt", "yuv420p"],
-    "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", "-rc", "vbr", "-pix_fmt", "yuv420p"],
-    "h264_qsv": ["-c:v", "h264_qsv", "-preset", "medium", "-global_quality", "18", "-pix_fmt", "nv12"],
+    "libx264": ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p"],
+    "h264_amf": ["-c:v", "h264_amf", "-usage", "transcoding", "-quality", "balanced", "-qp_i", "20", "-qp_p", "20", "-pix_fmt", "yuv420p"],
+    "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-rc", "vbr", "-pix_fmt", "yuv420p"],
+    "h264_qsv": ["-c:v", "h264_qsv", "-preset", "fast", "-global_quality", "20", "-pix_fmt", "nv12"],
 }
 
 _encoder_cache: list[str] | None = None
