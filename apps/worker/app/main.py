@@ -1037,7 +1037,7 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
                 raise RuntimeError("YouTube download cancelled")
 
         options: dict[str, object] = {
-            "format": "bv*[height<=1080]+ba/b[height<=1080]",
+            "format": "best[height<=1080]/bestvideo[height<=1080]+bestaudio/best",
             "merge_output_format": "mp4",
             "outtmpl": str(project_dir / "source.%(ext)s"),
             "noplaylist": True,
