@@ -1261,9 +1261,20 @@ async def transcribe_audio_managed(chunk: AudioChunk, language: str) -> Transcri
 
 
 async def transcribe_audio_byok(chunk: AudioChunk, language: str) -> Transcript:
-    configuration_error = providers.byok_configuration_error()
-    if configuration_error:
-        raise configuration_error
+    mode = providers.provider_mode()
+    if mode == "openai":
+        # In openai mode, only Groq keys are required for transcription.
+        if not providers.groq_api_keys():
+            raise WorkerError(
+                "BYOK_GROQ_KEY_MISSING",
+                "A Groq API key is required for transcription.",
+                status_code=503,
+                retryable=False,
+            )
+    else:
+        configuration_error = providers.byok_configuration_error()
+        if configuration_error:
+            raise configuration_error
     keys = providers.groq_api_keys()
     data: dict[str, Any] = {
         "response_format": "verbose_json",

@@ -489,6 +489,7 @@ def build_openai_highlight_request(
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
         "max_tokens": 8192,
+        "stream": False,
     }
 
 
@@ -520,6 +521,10 @@ def extract_openai_clips(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(content, str) or not content.strip():
         raise ValueError("OpenAI response message content is empty.")
 
+    # Some providers (Gemini via 9router) wrap JSON in markdown fences.
+    import re as _re
+    content = _re.sub(r"^```(?:json)?\s*\n?", "", content)
+    content = _re.sub(r"\n?```\s*$", "", content)
     parsed = json.loads(content)
     clips = parsed.get("clips") if isinstance(parsed, dict) else None
     if not isinstance(clips, list):
