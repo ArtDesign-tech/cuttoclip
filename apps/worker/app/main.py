@@ -936,7 +936,7 @@ def _youtube_extractor_args() -> dict[str, object]:
     enforced) and wires in the bgutil PO Token provider when configured via
     ``YTDLP_POT_BASE_URL`` so YouTube grants access to 1080p+ formats.
     """
-    client = os.getenv("YTDLP_PLAYER_CLIENT", "tv").strip() or "tv"
+    client = os.getenv("YTDLP_PLAYER_CLIENT", "mweb").strip() or "mweb"
     args: dict[str, object] = {"youtube": {"player_client": [client]}}
     pot_base = os.getenv("YTDLP_POT_BASE_URL", "").strip()
     if pot_base:
@@ -1052,7 +1052,7 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
                 raise RuntimeError("YouTube download cancelled")
 
         options: dict[str, object] = {
-            "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+            "format": "bestvideo[height<=1080][vcodec^=avc1]+bestaudio/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
             "merge_output_format": "mp4",
             "outtmpl": str(project_dir / "source.%(ext)s"),
             "noplaylist": True,
