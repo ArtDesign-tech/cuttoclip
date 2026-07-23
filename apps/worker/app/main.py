@@ -1798,10 +1798,10 @@ def highlight_segment_payload(segment: TranscriptSegment) -> dict[str, str | flo
 HW_ENCODERS = ("h264_amf", "h264_nvenc", "h264_qsv")
 
 ENCODER_PARAMS: dict[str, list[str]] = {
-    "libx264": ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p"],
-    "h264_amf": ["-c:v", "h264_amf", "-usage", "transcoding", "-quality", "quality", "-qp_i", "22", "-qp_p", "22", "-pix_fmt", "yuv420p"],
-    "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "22", "-rc", "vbr", "-pix_fmt", "yuv420p"],
-    "h264_qsv": ["-c:v", "h264_qsv", "-preset", "medium", "-global_quality", "22", "-pix_fmt", "nv12"],
+    "libx264": ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"],
+    "h264_amf": ["-c:v", "h264_amf", "-usage", "transcoding", "-quality", "quality", "-qp_i", "18", "-qp_p", "18", "-pix_fmt", "yuv420p"],
+    "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", "-rc", "vbr", "-pix_fmt", "yuv420p"],
+    "h264_qsv": ["-c:v", "h264_qsv", "-preset", "medium", "-global_quality", "18", "-pix_fmt", "nv12"],
 }
 
 _encoder_cache: list[str] | None = None
