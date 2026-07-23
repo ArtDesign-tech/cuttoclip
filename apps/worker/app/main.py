@@ -929,6 +929,21 @@ def _bundled_ffmpeg_location() -> str | None:
     return None
 
 
+def _youtube_extractor_args() -> dict[str, object]:
+    """Build yt-dlp extractor args for YouTube.
+
+    Uses the ``tv`` player client (which exposes HD formats when SABR is
+    enforced) and wires in the bgutil PO Token provider when configured via
+    ``YTDLP_POT_BASE_URL`` so YouTube grants access to 1080p+ formats.
+    """
+    client = os.getenv("YTDLP_PLAYER_CLIENT", "tv").strip() or "tv"
+    args: dict[str, object] = {"youtube": {"player_client": [client]}}
+    pot_base = os.getenv("YTDLP_POT_BASE_URL", "").strip()
+    if pot_base:
+        args["youtubepot-bgutilhttp"] = {"base_url": [pot_base]}
+    return args
+
+
 def _youtube_info(url: str, options: dict[str, object]) -> dict[str, object]:
     if yt_dlp is None:
         raise RuntimeError("yt-dlp is not installed")
@@ -999,7 +1014,7 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
-            "extractor_args": {"youtube": {"player_client": ["android"]}},
+            "extractor_args": _youtube_extractor_args(),
         }
         cookies = os.getenv("YTDLP_COOKIES", "")
         if cookies and os.path.isfile(cookies):
@@ -1037,14 +1052,14 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
                 raise RuntimeError("YouTube download cancelled")
 
         options: dict[str, object] = {
-            "format": "best[height<=1080]/bestvideo[height<=1080]+bestaudio/best",
+            "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
             "merge_output_format": "mp4",
             "outtmpl": str(project_dir / "source.%(ext)s"),
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [stop_cancelled_download],
-            "extractor_args": {"youtube": {"player_client": ["android"]}},
+            "extractor_args": _youtube_extractor_args(),
         }
         cookies = os.getenv("YTDLP_COOKIES", "")
         if cookies and os.path.isfile(cookies):
