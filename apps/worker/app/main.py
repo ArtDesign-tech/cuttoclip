@@ -1797,6 +1797,14 @@ def highlight_segment_payload(segment: TranscriptSegment) -> dict[str, str | flo
 
 HW_ENCODERS = ("h264_amf", "h264_nvenc", "h264_qsv")
 
+# Encoders that require actual GPU hardware — even if FFmpeg was compiled with
+# headers, the device node must exist before the encoder is advertised.
+_GPU_DEVICE_CHECKS: dict[str, str] = {
+    "h264_amf": "/dev/dri",
+    "h264_nvenc": "/dev/nvidia0",
+    "h264_qsv": "/dev/dri",
+}
+
 ENCODER_PARAMS: dict[str, list[str]] = {
     "libx264": ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"],
     "h264_amf": ["-c:v", "h264_amf", "-usage", "transcoding", "-quality", "quality", "-qp_i", "18", "-qp_p", "18", "-pix_fmt", "yuv420p"],
@@ -1825,6 +1833,11 @@ async def detect_encoders(executable: str) -> list[str]:
         available: list[str] = []
         for name in ENCODER_PARAMS:
             if name in output:
+                # Filter phantom hardware encoders: compiled headers present but
+                # no actual GPU device on this machine.
+                device = _GPU_DEVICE_CHECKS.get(name)
+                if device and not os.path.exists(device):
+                    continue
                 available.append(name)
         return available
 
