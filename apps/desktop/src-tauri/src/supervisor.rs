@@ -12,13 +12,17 @@
 //!   never outlive the desktop app.
 //! * Restart on demand, refused while a job is active.
 
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::{provider, runtime, secrets};
+
+/// Fixed loopback port the worker binds to. Must match the frontend's hardcoded
+/// worker URL in apps/web/src/lib/api.ts (127.0.0.1:4317) and the worker's own
+/// CUTTOCLIP_PORT default in apps/worker/app/__main__.py.
+const WORKER_PORT: u16 = 4317;
 
 pub struct WorkerHandle {
     child: Child,
@@ -131,15 +135,6 @@ fn merge_keys(user_keys: Option<String>, embedded: Vec<String>) -> Vec<String> {
     keys
 }
 
-fn free_loopback_port() -> Result<u16, String> {
-    // Bind to port 0 so the OS assigns a free port, read it, then drop the
-    // listener. There is a small race before the worker binds, but the window is
-    // tiny and the worker binds immediately on start.
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("could not find a free port: {e}"))?;
-    let port = listener.local_addr().map_err(|e| format!("could not read local port: {e}"))?.port();
-    Ok(port)
-}
-
 fn worker_executable(base: &Path, version: &str) -> PathBuf {
     // PyInstaller onedir layout: <runtime>/<version>/worker/local-worker.exe
     runtime::runtime_root(base)
@@ -153,7 +148,9 @@ fn spawn_worker(base: &Path, version: &str) -> Result<WorkerHandle, String> {
     if !exe.is_file() {
         return Err("The worker runtime is not installed.".into());
     }
-    let port = free_loopback_port()?;
+    // Fixed loopback port: the frontend talks to a hardcoded 127.0.0.1:4317
+    // (see apps/web/src/lib/api.ts), so the worker must bind that exact port.
+    let port = WORKER_PORT;
     let version_dir = runtime::runtime_root(base).join(version);
 
     let mut command = Command::new(&exe);
@@ -217,10 +214,14 @@ fn spawn_worker(base: &Path, version: &str) -> Result<WorkerHandle, String> {
 
 fn wait_for_health(port: u16) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{port}/api/health");
+    // Discard the response body to the platform null device. On Windows, curl.exe
+    // rejects "/dev/null" as a literal path and exits 23 (write error) even on a
+    // 200 — which would fail every probe and time out. NUL is the Windows sink.
+    let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        let ok = Command::new("curl")
-            .args(["-sS", "--max-time", "2", "-o", "/dev/null", "-w", "%{http_code}", &url])
+        let ok = crate::proc::curl_command()
+            .args(["-sS", "--max-time", "2", "-o", null_device, "-w", "%{http_code}", &url])
             .output()
             .ok()
             .filter(|o| o.status.success())

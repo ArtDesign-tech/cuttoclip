@@ -55,15 +55,35 @@ def _group_words(words: list[TranscriptWord], layout: Layout) -> list[list[Trans
     return groups
 
 
+def _visible_len(token: str) -> int:
+    # Width libass actually draws: drop {\...} override blocks and count each
+    # \h hard-space as one column. bold_focus/karaoke tokens carry override
+    # tags, so a raw len() would wildly overcount and skew the line balance.
+    stripped = re.sub(r"\{[^}]*\}", "", token).replace(r"\h", " ")
+    return len(stripped)
+
+
 def _line_broken(words: list[str], layout: Layout) -> str:
     if len(words) < 5:
         return " ".join(words)
-    midpoint = len(words) // 2
+    visible = [_visible_len(word) for word in words]
+    total = sum(visible) + (len(words) - 1)
     # Portrait captions stay within two balanced lines. Landscape groups have
     # enough width to remain on a single line unless they are unusually long.
-    if layout == "landscape" and len(" ".join(words)) <= 58:
+    if layout == "landscape" and total <= 58:
         return " ".join(words)
-    return " ".join(words[:midpoint]) + r"\N" + " ".join(words[midpoint:])
+    # Split where the two lines are closest in drawn width, not word count, so
+    # neither line dangles far longer than the other.
+    best_index = len(words) // 2
+    best_delta = None
+    running = 0
+    for index in range(1, len(words)):
+        running += visible[index - 1] + 1
+        delta = abs((running - 1) - (total - running))
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best_index = index
+    return " ".join(words[:best_index]) + r"\N" + " ".join(words[best_index:])
 
 
 def _clip_words(transcript: Transcript, clip_start: float, clip_end: float) -> list[TranscriptWord]:
@@ -153,13 +173,17 @@ def _events_for_words(words: list[TranscriptWord], preset: CaptionPreset, layout
             continue
 
         # Bold Focus holds the full phrase on screen while coloring only the
-        # currently spoken word. Each word event ends at the next word so there
-        # is no flicker between adjacent timestamps.
+        # currently spoken word. The whole line is already the heavy weight, so
+        # the active word is emphasised with colour ALONE: changing weight or
+        # scale of one word re-flows a centre-aligned line and makes the caption
+        # jump sideways on every word. \t animates from the base white to the
+        # accent over 90ms for a pop that never shifts glyph metrics. Each word
+        # event ends at the next word so there is no flicker between timestamps.
         for index, word in enumerate(group):
             rendered: list[str] = []
             for word_index, text in enumerate(escaped):
                 if word_index == index:
-                    rendered.append(r"{\c" + accent + r"\b1}" + text + r"{\rCaption}")
+                    rendered.append(r"{\c&H00FFFFFF&\t(0,90,\c" + accent + r")}" + text + r"{\rCaption}")
                 else:
                     rendered.append(text)
             event_end = group[index + 1].startSeconds if index + 1 < len(group) else word.endSeconds

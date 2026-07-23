@@ -17,12 +17,13 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::proc::curl_command;
 
 /// A locked runtime descriptor. In the shipped build this comes from a bundled
 /// `runtime-lock.json`; the URL/SHA/version are pinned at release time.
@@ -140,7 +141,7 @@ fn download_with_resume(url: &str, dest: &Path, cancel: &Arc<AtomicBool>) -> Res
     // curl -C - resumes from the current size of the partial file via HTTP Range;
     // --fail turns an HTTP error status into a non-zero exit; --retry adds
     // transient-failure retries.
-    let status = Command::new("curl")
+    let status = curl_command()
         .args([
             "-fSL",
             "-C",

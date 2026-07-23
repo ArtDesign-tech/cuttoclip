@@ -35,7 +35,7 @@ DEFAULT_GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcrip
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_OPENAI_MODEL = "gemini/gemini-2.5-flash"
+DEFAULT_OPENAI_MODEL = "ag/gemini-3-flash-agent"
 DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:4000/v1"
 
 HIGHLIGHT_WINDOW_SECONDS = 12 * 60

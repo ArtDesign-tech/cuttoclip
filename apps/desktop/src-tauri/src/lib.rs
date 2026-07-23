@@ -1,3 +1,4 @@
+mod proc;
 mod provider;
 mod runtime;
 mod secrets;

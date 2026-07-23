@@ -14,6 +14,11 @@ block_cipher = None
 # onnxruntime ships native DLLs + data that must be collected wholesale.
 ort_datas, ort_binaries, ort_hiddenimports = collect_all("onnxruntime")
 
+# yt-dlp loads its hundreds of extractors via importlib, so static analysis
+# misses them — collect the whole package or YouTube/URL downloads silently
+# break (worker reports ytDlp:false and raises YTDLP_UNAVAILABLE at runtime).
+ydl_datas, ydl_binaries, ydl_hiddenimports = collect_all("yt_dlp")
+
 hiddenimports = [
     "uvicorn",
     "uvicorn.logging",
@@ -25,6 +30,7 @@ hiddenimports = [
     *collect_submodules("app"),
     *ort_hiddenimports,
     *collect_submodules("numpy"),
+    *ydl_hiddenimports,
 ]
 
 # Bundle the Inter font next to the frozen app so captions.py can find it at
@@ -32,12 +38,13 @@ hiddenimports = [
 datas = [
     ("app/assets/fonts", "app/assets/fonts"),
     *ort_datas,
+    *ydl_datas,
 ]
 
 a = Analysis(
     ["run_worker.py"],
     pathex=["."],
-    binaries=ort_binaries,
+    binaries=[*ort_binaries, *ydl_binaries],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

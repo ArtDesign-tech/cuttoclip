@@ -12,7 +12,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 
@@ -183,7 +183,7 @@ fn gateway_error_message(parsed: &serde_json::Value) -> Option<String> {
 }
 
 fn curl_post_json(url: &str, body: &str) -> Result<String, String> {
-    let mut child = Command::new("curl")
+    let mut child = crate::proc::curl_command()
         .args([
             "-sS",
             "--max-time",
@@ -226,7 +226,7 @@ fn curl_get_authed(url: &str, token: &str) -> Result<String, String> {
         return Err("The stored installation token is malformed.".into());
     }
     let config = format!("url = \"{url}\"\nrequest = \"GET\"\nheader = \"Authorization: Bearer {token}\"\nheader = \"Accept: application/json\"\n");
-    let mut child = Command::new("curl")
+    let mut child = crate::proc::curl_command()
         .args(["-sS", "--max-time", "30", "--config", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
