@@ -488,6 +488,7 @@ def build_openai_highlight_request(
         ],
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
+        "max_tokens": 8192,
     }
 
 
@@ -512,6 +513,10 @@ def extract_openai_clips(payload: Any) -> list[dict[str, Any]]:
     first = choices[0]
     message = first.get("message") if isinstance(first, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
+    # Reasoning models (DeepSeek V4 Pro, etc.) may put the final answer in
+    # reasoning_content when content is empty due to token limits.
+    if (not isinstance(content, str) or not content.strip()) and isinstance(message, dict):
+        content = message.get("reasoning_content")
     if not isinstance(content, str) or not content.strip():
         raise ValueError("OpenAI response message content is empty.")
 
