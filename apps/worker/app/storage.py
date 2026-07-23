@@ -134,10 +134,28 @@ class ProjectStore:
             interrupted.append(job)
         return interrupted
 
-    def delete_project(self, project_id: str) -> None:
-        """Remove only internal project/job records, never source or output files."""
-        self.projects.pop(project_id, None)
+    def delete_project(self, project_id: str, *, remove_outputs: bool = True) -> None:
+        """Remove a project's records, source files, and (by default) rendered outputs.
+
+        The source directory under ``projects_dir`` is always removed. When
+        ``remove_outputs`` is True the rendered clip directory under
+        ``output_root`` is deleted as well, so a project delete is a full cleanup.
+        """
+        project = self.projects.pop(project_id, None)
         shutil.rmtree(self.projects_dir / project_id, ignore_errors=True)
+        if remove_outputs and project is not None:
+            output_dir = self.project_output_dir(project)
+            # Guard: only delete a directory that is genuinely under output_root
+            # and carries this project's id suffix, never something broader.
+            try:
+                resolved = output_dir.resolve()
+                if (
+                    resolved.parent == self.output_root
+                    and resolved.name.endswith(project_id[:8])
+                ):
+                    shutil.rmtree(resolved, ignore_errors=True)
+            except OSError:
+                pass
         for job_id, job in list(self.jobs.items()):
             if job.projectId != project_id:
                 continue
