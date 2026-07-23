@@ -936,6 +936,9 @@ def _youtube_info(url: str, options: dict[str, object]) -> dict[str, object]:
     cookies = os.getenv("YTDLP_COOKIES", "")
     if cookies and os.path.isfile(cookies):
         merged["cookiefile"] = cookies
+    proxy = os.getenv("YTDLP_PROXY", "")
+    if proxy:
+        merged["proxy"] = proxy
     with yt_dlp.YoutubeDL(merged) as downloader:
         return downloader.extract_info(url, download=not bool(options.get("skip_download"))) or {}
 
