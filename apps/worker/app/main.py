@@ -999,6 +999,7 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
+            "extractor_args": {"youtube": {"player_client": ["android"]}},
         }
         cookies = os.getenv("YTDLP_COOKIES", "")
         if cookies and os.path.isfile(cookies):
@@ -1043,6 +1044,7 @@ async def prepare_youtube_source(job: Job, project: Project) -> None:
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [stop_cancelled_download],
+            "extractor_args": {"youtube": {"player_client": ["android"]}},
         }
         cookies = os.getenv("YTDLP_COOKIES", "")
         if cookies and os.path.isfile(cookies):
